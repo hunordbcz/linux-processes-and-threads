@@ -40,10 +40,12 @@ typedef struct {
     int threadsExited;
     pthread_mutex_t lock;
     pthread_mutex_t lockTen;
-    pthread_cond_t condExit;
+    pthread_mutex_t lockExit;
+    pthread_cond_t condStart;
     pthread_cond_t condTen;
     int nrRunning;
     int thTenEntered;
+    pthread_cond_t condExit;
 } PROCESS, *pPROCESS;
 
 pPROCESS curProc = NULL;
@@ -190,40 +192,43 @@ void execFOUR(pTHREAD thread) {
 //    startStop(curProc->ID, thread->ID);
 //    return;
     lock(&curProc->lock);
-//    while(thread->ID != 10 && curProc->threadsExited >=38 && curProc->thTenExited == FALSE);
-    while ((thread->ID != 10 && (curProc->nrRunning >= 4 && (curProc->thTenExited == FALSE))) ||
-           (curProc->nrRunning >= 5 && (curProc->thTenExited == TRUE))) {
-        pthread_cond_wait(&curProc->condExit, &curProc->lock);
-    }
-//    unlock(&curProc->lock);
-//
-//    P(curProc->vSemaphore, 0);
-    info(BEGIN, curProc->ID, thread->ID);
-    curProc->nrRunning++;
-
-    if (thread->ID == 10) {
-        pthread_cond_broadcast(&curProc->condExit);
-    } else {
-        pthread_cond_signal(&curProc->condTen);
+//    while(thread->ID != 10 && curProc->nrRunning == 5 && curProc->thTenExited == FALSE){
+    while (curProc->nrRunning >= 5) {
+        pthread_cond_wait(&curProc->condStart, &curProc->lock);
     }
     unlock(&curProc->lock);
 
-    lock(&curProc->lockTen);
-//    while (thread->ID != 10 && curProc->thTenExited == FALSE && curProc->threadsExited == 3){
-    while (thread->ID != 10 && !curProc->thTenExited && (curProc->nrRunning != 5 || curProc->threadsExited < 38)) {
-        pthread_cond_wait(&curProc->condExit, &curProc->lockTen);
-    }
-    unlock(&curProc->lockTen);
+    lock(&curProc->lock);
+    info(BEGIN, curProc->ID, thread->ID);
+    curProc->nrRunning++;
 
-    lock(&curProc->lockTen);
-    while (thread->ID == 10 && curProc->nrRunning != 5) {
-        pthread_cond_wait(&curProc->condTen, &curProc->lockTen);
+    if (thread->ID != 10) {
+        pthread_cond_signal(&curProc->condTen);
     }
-    unlock(&curProc->lockTen);
+
+    unlock(&curProc->lock);
+
+    lock(&curProc->lockExit);
+    while (thread->ID != 10 && curProc->threadsExited == 38 && curProc->thTenExited == FALSE) {
+        printf("condExit\n");
+//    while (thread->ID != 10 && !curProc->thTenExited && (curProc->nrRunning != 5 || curProc->threadsExited < 38)) {
+        pthread_cond_wait(&curProc->condExit, &curProc->lockExit);
+    }
+//    unlock(&curProc->lockExit);
+//
+//    lock(&curProc->lockTen);
+    while (thread->ID == 10 && curProc->nrRunning < 5) {
+//        printf("TENENENENENENNENE\n");
+        pthread_cond_wait(&curProc->condTen, &curProc->lockExit);
+    }
+    unlock(&curProc->lockExit);
 
     lock(&curProc->lock);
-    pthread_cond_broadcast(&curProc->condExit);
     exitThread(thread);
+    if (thread->ID == 10) {
+        pthread_cond_broadcast(&curProc->condExit);
+    }
+    pthread_cond_broadcast(&curProc->condStart);
     unlock(&curProc->lock);
 }
 
@@ -356,11 +361,13 @@ pPROCESS makeProcess() {
     proc->threadsExited = 0;
     proc->nrRunning = 0;
 
-    if (pthread_mutex_init(&proc->lock, NULL) != 0 || pthread_mutex_init(&proc->lockTen, NULL) != 0) {
+    if (pthread_mutex_init(&proc->lock, NULL) != 0 || pthread_mutex_init(&proc->lockTen, NULL) != 0 ||
+        pthread_mutex_init(&proc->lockExit, NULL) != 0) {
         perror("Cannot initialize the lock");
         exit(2);
     }
-    if (pthread_cond_init(&proc->condExit, NULL) != 0 || pthread_cond_init(&proc->condTen, NULL) != 0) {
+    if (pthread_cond_init(&proc->condStart, NULL) != 0 || pthread_cond_init(&proc->condTen, NULL) != 0 ||
+        pthread_cond_init(&proc->condExit, NULL) != 0) {
         perror("Cannot initialize the condition variable");
         exit(3);
     }
@@ -408,12 +415,14 @@ void waitProcess(int processNr) {
 
 void exitProcess(int processNr) {
     free(curProc->processes);
-//    if (pthread_mutex_destroy(&curProc->lock) != 0) {
-//        perror("Cannot destroy the lock");
-//        exit(8);
-//    }
+    if (pthread_mutex_destroy(&curProc->lock) != 0 || pthread_mutex_destroy(&curProc->lockTen) != 0 ||
+        pthread_mutex_destroy(&curProc->lockExit) != 0) {
+        perror("Cannot destroy the lock");
+        exit(8);
+    }
 
-    if (pthread_cond_destroy(&curProc->condExit) != 0 || pthread_cond_destroy(&curProc->condTen) != 0) {
+    if (pthread_cond_destroy(&curProc->condStart) != 0 || pthread_cond_destroy(&curProc->condTen) != 0 ||
+        pthread_cond_destroy(&curProc->condExit) != 0) {
         perror("Cannot destroy the condition variable");
         exit(9);
     }
