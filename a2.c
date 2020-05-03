@@ -78,23 +78,18 @@ void clearMutex();
 const char *SIX_FIRST = "/6_first_done";
 const char *FIVE_FIRST = "/5_first_done";
 const char *SIX_SECOND = "/6_second_done";
+sem_t *semSixOne;
+sem_t *semFiveOne;
+sem_t *semSixTwo;
 
 void clear() {
-    sem_t *semSixOne = sem_open(SIX_FIRST, O_CREAT, 0666, 0);
-    sem_t *semFiveOne = sem_open(FIVE_FIRST, O_CREAT, 0666, 0);
-    sem_t *semSixTwo = sem_open(SIX_SECOND, O_CREAT, 0666, 0);
-
-    if (semSixOne == SEM_FAILED || semFiveOne == SEM_FAILED || semSixTwo == SEM_FAILED) {
-        perror("Parent  : [sem_open] Failed\n");
-        exit(10);
-    }
     if (sem_close(semSixOne) != 0 || sem_close(semFiveOne) != 0 || sem_close(semSixTwo) != 0) {
         perror("Parent  : [sem_close] Failed\n");
-        exit(10);
+        exit(EXIT_FAILURE);
     }
     if (sem_unlink(SIX_FIRST) < 0 || sem_unlink(FIVE_FIRST) < 0 || sem_unlink(SIX_SECOND) < 0) {
         printf("Parent  : [sem_unsemlink] Failed\n");
-        exit(10);
+        exit(EXIT_FAILURE);
     }
 }
 
@@ -102,10 +97,22 @@ int main(int argc, char **argv) {
     init();
     info(BEGIN, 1, 0);
 
+    semSixOne = sem_open(SIX_FIRST, O_CREAT, 0666, 0);
+    semFiveOne = sem_open(FIVE_FIRST, O_CREAT, 0666, 0);
+    semSixTwo = sem_open(SIX_SECOND, O_CREAT, 0666, 0);
+    sem_init(semSixOne, 1, 0);
+    sem_init(semSixOne, 1, 0);
+    sem_init(semSixOne, 1, 0);
+
+    if (semSixOne == SEM_FAILED || semFiveOne == SEM_FAILED || semSixTwo == SEM_FAILED) {
+        perror("Parent  : [sem_open] Failed\n");
+        exit(EXIT_FAILURE);
+    }
+
     if (forkProcess(2, TRUE) == CHILD) {
         exitProcess(2);
     } else {
-        if (forkProcess(3, TRUE) == CHILD) {
+        if (forkProcess(3, FALSE) == CHILD) {
             if (forkProcess(4, TRUE) == CHILD) {
                 createThreads(43); // 43 normally
                 if (forkProcess(7, TRUE) == CHILD) {
@@ -125,9 +132,15 @@ int main(int argc, char **argv) {
                 createThreads(5);
                 exitProcess(5);
             } else {
-//                sem_wait(semSixTwo);
+
+                wait(NULL); // wait for Proc6
+                wait(NULL); // wait for Proc6
+                wait(NULL); // wait for Proc6
 //                wait(NULL); // wait for Proc6
 //                wait(NULL); // wait for Proc6
+//                wait(NULL); // wait for Proc6
+//                wait(NULL); // wait for Proc6
+//                wait(NULL); // wait for Proc3
 //                wait(NULL); // wait for Proc3
             }
         }
@@ -159,14 +172,14 @@ void *execThread(void *param) {
 void lock(pthread_mutex_t *lock) {
     if (pthread_mutex_lock(lock) != 0) {
         perror("Cannot take the lock");
-        exit(4);
+        exit(EXIT_FAILURE);
     }
 }
 
 void unlock(pthread_mutex_t *lock) {
     if (pthread_mutex_unlock(lock) != 0) {
         perror("Cannot release the lock");
-        exit(5);
+        exit(EXIT_FAILURE);
     }
 }
 
@@ -210,15 +223,14 @@ void execFOUR(pTHREAD thread) {
 }
 
 void execFIVE(pTHREAD thread) {
-//    sem_t *semSixOne = sem_open(SIX_FIRST, O_CREAT, 0666, 0);
-    sem_t *semFiveOne = sem_open(FIVE_FIRST, O_CREAT, 0666, 0);
     P(curProc->vSemaphore, thread->ID - 1);
-//    if (thread->ID == ONE) {
-//        printf("WAITING ONE\n");
-//        if (sem_wait(semSixOne) < 0)
-//            printf("Child  : [sem_wait1] Failed\n");
-//
-//    }
+
+    if (thread->ID == 1) {
+        printf("\nASD\n");
+        sem_post(semSixOne);
+        sem_wait(semFiveOne);
+    }
+
     info(BEGIN, curProc->ID, thread->ID);
 
 
@@ -234,43 +246,23 @@ void execFIVE(pTHREAD thread) {
     if (thread->ID != ONE) {
         V(curProc->vSemaphore, thread->ID - 2);
     } else {
-        if (sem_post(semFiveOne) < 0)
+        if (sem_post(semSixTwo) < 0)
             printf("Child   : [sem_post2] Failed \n");
     }
 }
 
 void execSIX(pTHREAD thread) {
-    sem_t *semSixOne = sem_open(SIX_FIRST, O_CREAT, 0666, 0);
-    sem_t *semFiveOne = sem_open(FIVE_FIRST, O_CREAT, 0666, 0);
-    sem_t *semSixTwo = sem_open(SIX_SECOND, O_CREAT, 0666, 0);
-
-    if (semSixOne == SEM_FAILED || semFiveOne == SEM_FAILED || semSixTwo == SEM_FAILED) {
-        perror("Parent  : [sem_open] Failed\n");
-        return;
+    switch (thread->ID) {
+        case FOUR:
+            sem_wait(semSixTwo);
+            break;
     }
 
     startStop(curProc->ID, thread->ID);
 
-//    if (thread->ID != FOUR) {
-//        startStop(curProc->ID, thread->ID);
-//
-//        if (thread->ID == FIVE) {
-//            if (sem_post(semSixOne) < 0) printf("Parent   : [sem_post1] Failed \n");
-//        }
-//
-//
-//    } else {
-//        info(BEGIN, curProc->ID, thread->ID);
-//        if (sem_wait(semFiveOne) < 0)
-//            printf("Parent  : [sem_wait] Failed\n");
-//        info(END, curProc->ID, thread->ID);
-//        if (sem_post(semSixTwo) < 0) printf("Parent   : [sem_post1] Failed \n");
-//    }
-//
-//
-//    if (thread->ID == FOUR) {
-//
-//    }
+    if (thread->ID == FIVE) {
+        sem_post(semFiveOne);
+    }
 }
 
 void initializeSemaphoreV() {
@@ -310,7 +302,7 @@ void createThreads(int nrThreads) {
             semctl(curProc->vSemaphore, 4, SETVAL, 0);
             break;
         case SIX:
-
+            printf("asd\n");
 
         default:
             break;
@@ -385,7 +377,8 @@ int forkProcess(int ID, int waitChild) {
         default:
             curProc->processes[ID] = pid;
             if (waitChild) {
-                waitpid(pid, NULL, 0);
+//                waitpid(pid, NULL, 0);
+                wait(NULL);
             }
             return PARENT;
     }
