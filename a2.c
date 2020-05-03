@@ -36,16 +36,15 @@ typedef struct {
     int ID;
     pid_t *processes;
     int vSemaphore;
-    int thTenExited;
+    int threadTenEntered;
+    int threadTenExited;
     int threadsExited;
-    pthread_mutex_t lock;
-    pthread_mutex_t lockTen;
-    pthread_mutex_t lockExit;
-    pthread_cond_t condStart;
-    pthread_cond_t condTen;
     int nrRunning;
-    int thTenEntered;
+    int total;
+    pthread_mutex_t lock;
     pthread_cond_t condExit;
+    pthread_cond_t condWait;
+    pthread_cond_t condTen;
 } PROCESS, *pPROCESS;
 
 pPROCESS curProc = NULL;
@@ -60,9 +59,7 @@ int forkProcess(int ID, int waitChild);
 
 void startStop(int processNr, int threadNr);
 
-void waitProcess(int processNr);
-
-void exitProcess(int processNr);
+void exitProcess();
 
 void createThreads(int nrThreads);
 
@@ -73,6 +70,10 @@ void execFIVE(pTHREAD thread);
 void execSIX(pTHREAD thread);
 
 void exitThread(pTHREAD thread);
+
+void clearSemaphoreV(int nr);
+
+void clearMutex();
 
 const char *SIX_FIRST = "/6_first_done";
 const char *FIVE_FIRST = "/5_first_done";
@@ -98,20 +99,7 @@ void clear() {
 }
 
 int main(int argc, char **argv) {
-
-
     init();
-//    curProc = makeProcess();
-//    curProc->ID = 4;
-//    createThreads(43);
-
-    sem_t *semSixTwo = sem_open(SIX_SECOND, O_CREAT, 0666, 0);
-
-    if (semSixTwo == SEM_FAILED) {
-        perror("Parent  : [sem_open] Failed\n");
-        return -1;
-    }
-
     info(BEGIN, 1, 0);
 
     if (forkProcess(2, TRUE) == CHILD) {
@@ -144,12 +132,6 @@ int main(int argc, char **argv) {
             }
         }
     }
-//    waitProcess(2);
-//    waitProcess(3);
-//    waitProcess(6);
-//    waitProcess(7);
-//    waitProcess(4);
-//    waitProcess(5);
 
     info(END, 1, 0);
     clear();
@@ -189,47 +171,42 @@ void unlock(pthread_mutex_t *lock) {
 }
 
 void execFOUR(pTHREAD thread) {
-//    startStop(curProc->ID, thread->ID);
-//    return;
+    P(curProc->vSemaphore, 0);
+    info(BEGIN, curProc->ID, thread->ID);
+
     lock(&curProc->lock);
-//    while(thread->ID != 10 && curProc->nrRunning == 5 && curProc->thTenExited == FALSE){
-    while (curProc->nrRunning >= 5) {
-        pthread_cond_wait(&curProc->condStart, &curProc->lock);
+    curProc->total++;
+    curProc->nrRunning++;
+    unlock(&curProc->lock);
+
+    lock(&curProc->lock);
+    while (thread->ID != 10 && !curProc->threadTenEntered && !curProc->threadTenExited && curProc->total > 38) {
+        pthread_cond_wait(&curProc->condWait, &curProc->lock);
     }
     unlock(&curProc->lock);
 
     lock(&curProc->lock);
-    info(BEGIN, curProc->ID, thread->ID);
-    curProc->nrRunning++;
-
-    if (thread->ID != 10) {
+    if (thread->ID == 10) {
+        curProc->threadTenEntered = 1;
+        pthread_cond_broadcast(&curProc->condWait);
+    } else {
         pthread_cond_signal(&curProc->condTen);
     }
-
     unlock(&curProc->lock);
 
-    lock(&curProc->lockExit);
-    while (thread->ID != 10 && curProc->threadsExited == 38 && curProc->thTenExited == FALSE) {
-        printf("condExit\n");
-//    while (thread->ID != 10 && !curProc->thTenExited && (curProc->nrRunning != 5 || curProc->threadsExited < 38)) {
-        pthread_cond_wait(&curProc->condExit, &curProc->lockExit);
+    lock(&curProc->lock);
+    while (thread->ID != 10 && curProc->threadTenEntered && !curProc->threadTenExited) {
+        pthread_cond_wait(&curProc->condExit, &curProc->lock);
     }
-//    unlock(&curProc->lockExit);
-//
-//    lock(&curProc->lockTen);
     while (thread->ID == 10 && curProc->nrRunning < 5) {
-//        printf("TENENENENENENNENE\n");
-        pthread_cond_wait(&curProc->condTen, &curProc->lockExit);
+        pthread_cond_wait(&curProc->condTen, &curProc->lock);
     }
-    unlock(&curProc->lockExit);
+    unlock(&curProc->lock);
 
     lock(&curProc->lock);
     exitThread(thread);
-    if (thread->ID == 10) {
-        pthread_cond_broadcast(&curProc->condExit);
-    }
-    pthread_cond_broadcast(&curProc->condStart);
     unlock(&curProc->lock);
+    V(curProc->vSemaphore, 0);
 }
 
 void execFIVE(pTHREAD thread) {
@@ -296,13 +273,36 @@ void execSIX(pTHREAD thread) {
 //    }
 }
 
+void initializeSemaphoreV() {
+    curProc->vSemaphore = semget(IPC_PRIVATE, MAX_SEMAPHORES, IPC_CREAT | 0600);
+    if (curProc->vSemaphore < 0) {
+        perror("Error creating the vSemaphore set");
+        exit(EXIT_FAILURE);
+    }
+}
+
+void initializeMutex() {
+    if (pthread_mutex_init(&curProc->lock, NULL) != 0) {
+        perror("Cannot initialize the lock");
+        exit(EXIT_FAILURE);
+    }
+    if (pthread_cond_init(&curProc->condWait, NULL) != 0 || pthread_cond_init(&curProc->condTen, NULL) != 0 ||
+        pthread_cond_init(&curProc->condExit, NULL) != 0) {
+        perror("Cannot initialize the condition variables");
+        exit(EXIT_FAILURE);
+    }
+}
+
 void createThreads(int nrThreads) {
     THREAD threads[MAX_THREADS];
     switch (curProc->ID) {
         case FOUR:
-//            semctl(curProc->vSemaphore, 0, SETVAL, 1);
+            initializeSemaphoreV();
+            semctl(curProc->vSemaphore, 0, SETVAL, 5);
+
             break;
         case FIVE:
+            initializeSemaphoreV();
             semctl(curProc->vSemaphore, 0, SETVAL, 1);
             semctl(curProc->vSemaphore, 1, SETVAL, 0);
             semctl(curProc->vSemaphore, 2, SETVAL, 0);
@@ -329,12 +329,18 @@ void createThreads(int nrThreads) {
         pthread_join(threads[i].thread, NULL);
     }
 
-    if (curProc->ID == 5) {
-        semctl(curProc->vSemaphore, 0, IPC_RMID, 0);
-        semctl(curProc->vSemaphore, 1, IPC_RMID, 0);
-        semctl(curProc->vSemaphore, 2, IPC_RMID, 0);
-        semctl(curProc->vSemaphore, 3, IPC_RMID, 0);
-        semctl(curProc->vSemaphore, 4, IPC_RMID, 0);
+    switch (curProc->ID) {
+        case FOUR:
+            clearMutex();
+            clearSemaphoreV(1);
+            break;
+        case FIVE:
+            clearSemaphoreV(5);
+            break;
+        case SIX:
+
+        default:
+            break;
     }
 }
 
@@ -350,29 +356,12 @@ void V(int semId, int semNumber) {
 
 pPROCESS makeProcess() {
     pPROCESS proc = (pPROCESS) malloc(sizeof(PROCESS));
-    proc->vSemaphore = semget(IPC_PRIVATE, MAX_SEMAPHORES, IPC_CREAT | 0600);
-    if (proc->vSemaphore < 0) {
-        perror("Error creating the vSemaphore set");
-        exit(EXIT_FAILURE);
-    }
-
-    proc->thTenExited = FALSE;
-    proc->thTenEntered = FALSE;
+    proc->processes = (pid_t *) malloc(sizeof(pid_t));
+    proc->threadTenEntered = FALSE;
+    proc->threadTenExited = FALSE;
     proc->threadsExited = 0;
     proc->nrRunning = 0;
-
-    if (pthread_mutex_init(&proc->lock, NULL) != 0 || pthread_mutex_init(&proc->lockTen, NULL) != 0 ||
-        pthread_mutex_init(&proc->lockExit, NULL) != 0) {
-        perror("Cannot initialize the lock");
-        exit(2);
-    }
-    if (pthread_cond_init(&proc->condStart, NULL) != 0 || pthread_cond_init(&proc->condTen, NULL) != 0 ||
-        pthread_cond_init(&proc->condExit, NULL) != 0) {
-        perror("Cannot initialize the condition variable");
-        exit(3);
-    }
-    proc->processes = (pid_t *) malloc(sizeof(pid_t));
-
+    proc->total = 0;
     return proc;
 }
 
@@ -384,8 +373,8 @@ int forkProcess(int ID, int waitChild) {
     pid_t pid = fork();
     switch (pid) {
         case -1:
-
-            exit(-1);
+            perror("Cannot create new process");
+            exit(EXIT_FAILURE);
         case 0:
             info(BEGIN, ID, 0);
             pPROCESS newProc = makeProcess();
@@ -400,8 +389,6 @@ int forkProcess(int ID, int waitChild) {
             }
             return PARENT;
     }
-
-
 }
 
 void startStop(int processNr, int threadNr) {
@@ -409,33 +396,44 @@ void startStop(int processNr, int threadNr) {
     info(END, processNr, threadNr);
 }
 
-void waitProcess(int processNr) {
-    waitpid(curProc->processes[processNr], NULL, 0);
+void clearSemaphoreV(int nr) {
+    for (int i = 0; i < nr; i++) {
+        semctl(curProc->vSemaphore, i, IPC_RMID, 0);
+    }
 }
 
-void exitProcess(int processNr) {
-    free(curProc->processes);
-    if (pthread_mutex_destroy(&curProc->lock) != 0 || pthread_mutex_destroy(&curProc->lockTen) != 0 ||
-        pthread_mutex_destroy(&curProc->lockExit) != 0) {
+void clearMutex() {
+    if (pthread_mutex_destroy(&curProc->lock) != 0) {
         perror("Cannot destroy the lock");
-        exit(8);
+        exit(EXIT_FAILURE);
     }
 
-    if (pthread_cond_destroy(&curProc->condStart) != 0 || pthread_cond_destroy(&curProc->condTen) != 0 ||
+    if (pthread_cond_destroy(&curProc->condWait) != 0 || pthread_cond_destroy(&curProc->condTen) != 0 ||
         pthread_cond_destroy(&curProc->condExit) != 0) {
         perror("Cannot destroy the condition variable");
-        exit(9);
+        exit(EXIT_FAILURE);
+    }
+}
+
+void exitProcess() {
+    info(END, curProc->ID, 0);
+    if (curProc != NULL) {
+        if (curProc->processes != NULL) {
+            free(curProc->processes);
+        }
+        free(curProc);
     }
 
-    info(END, curProc->ID, 0);
-    exit(0);
+    exit(EXIT_SUCCESS);
 }
 
 void exitThread(pTHREAD thread) {
     info(END, curProc->ID, thread->ID);
 
     if (thread->ID == 10) {
-        curProc->thTenExited = TRUE;
+        curProc->threadTenExited = TRUE;
+        curProc->threadTenEntered = FALSE;
+        pthread_cond_broadcast(&curProc->condExit);
     }
     curProc->nrRunning--;
     curProc->threadsExited++;
